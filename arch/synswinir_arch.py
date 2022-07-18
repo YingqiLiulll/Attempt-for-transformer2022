@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 
 from basicsr.utils.registry import ARCH_REGISTRY
-from .arch_util import to_2tuple, trunc_normal_
+from arch_util import to_2tuple, trunc_normal_
 
 
 def drop_path(x, drop_prob: float = 0., training: bool = False):
@@ -216,7 +216,7 @@ class WindowAttention(nn.Module):
         proj_drop (float, optional): Dropout ratio of output. Default: 0.0
     """
 
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_type, d_hid=90, Dattn_dropout=0.1):
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_type = 'dense', d_hid=90, Dattn_dropout=0.1):
 
         super().__init__()
         self.dim = dim
@@ -225,13 +225,15 @@ class WindowAttention(nn.Module):
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim**-0.5
 
+        # print(type(window_size))
+
         # add multiple attention mechanism
-        self.w_1 = nn.Linear(dim, d_hid) #由原始input的维度d_k到中间的维度d_hid
-        self.w_2 = nn.Linear(d_hid, window_size**2) #由中间的维度d_hid到设置的最大维度N
+        self.w_1 = nn.Linear(dim//num_heads, d_hid) #由原始input的维度d_k到中间的维度d_hid
+        self.w_2 = nn.Linear(d_hid,64) #由中间的维度d_hid到设置的最大维度N
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(Dattn_dropout)
 
-        self.batch_size = batch_size
+        # self.batch_size = batch_size
         self.attn_type = attn_type.lower()
 
         # define a parameter table of relative position bias
@@ -295,7 +297,15 @@ class WindowAttention(nn.Module):
             x = self.proj_drop(x)
 
         elif self.attn_type == "dense":
-            attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:window_size**2]
+            # print('q_shape:', q.shape)
+            attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:64]
+            # F1 = self.w_1(q)
+            # # print('F1:', F1.shape)
+            # F1 = self.relu(F1)
+            # F2 = self.w_2(F1)
+            # attn = F2[:,:,:,:64]
+            
+            # print('attn_shape:', attn.shape)
 
             if mask is not None:
                 nw = mask.shape[0]
@@ -307,10 +317,9 @@ class WindowAttention(nn.Module):
             
             attn = self.dropout(attn)
             x = torch.matmul(attn, v)
+            # print('x_shape:',x.shape)
 
         return x
-
-        elif self.attn_type == "random":
 
 
     def extra_repr(self) -> str:
@@ -830,7 +839,7 @@ class UpsampleOneStep(nn.Sequential):
 
 
 @ARCH_REGISTRY.register()
-class SwinIR(nn.Module):
+class SynSwinIR(nn.Module):
     r""" SwinIR
         A PyTorch impl of : `SwinIR: Image Restoration Using Swin Transformer`, based on Swin Transformer.
 
@@ -881,7 +890,7 @@ class SwinIR(nn.Module):
                  upsampler='',
                  resi_connection='1conv',
                  **kwargs):
-        super(SwinIR, self).__init__()
+        super(SynSwinIR, self).__init__()
         num_in_ch = in_chans
         num_out_ch = in_chans
         num_feat = 64
@@ -1072,24 +1081,24 @@ class SwinIR(nn.Module):
         return flops
 
 
-if __name__ == '__main__':
-    upscale = 4
-    window_size = 8
-    height = (1024 // upscale // window_size + 1) * window_size
-    width = (720 // upscale // window_size + 1) * window_size
-    model = SwinIR(
-        upscale=2,
-        img_size=(height, width),
-        window_size=window_size,
-        img_range=1.,
-        depths=[6, 6, 6, 6],
-        embed_dim=60,
-        num_heads=[6, 6, 6, 6],
-        mlp_ratio=2,
-        upsampler='pixelshuffledirect')
-    print(model)
-    print(height, width, model.flops() / 1e9)
+# if __name__ == '__main__':
+#     upscale = 4
+#     window_size = 8
+#     height = (1024 // upscale // window_size + 1) * window_size
+#     width = (720 // upscale // window_size + 1) * window_size
+#     model = SynSwinIR(
+#         upscale=2,
+#         img_size=(height, width),
+#         window_size=window_size,
+#         img_range=1.,
+#         depths=[6, 6, 6, 6],
+#         embed_dim=60,
+#         num_heads=[6, 6, 6, 6],
+#         mlp_ratio=2,
+#         upsampler='pixelshuffledirect')
+#     # print(model)
+#     print(height, width, model.flops() / 1e9)
 
-    x = torch.randn((1, 3, height, width))
-    x = model(x)
-    print(x.shape)
+#     x = torch.randn((1, 3, height, width))
+#     x = model(x)
+#     print(x.shape)
