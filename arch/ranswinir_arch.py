@@ -216,7 +216,7 @@ class WindowAttention(nn.Module):
         proj_drop (float, optional): Dropout ratio of output. Default: 0.0
     """
 
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_type = 'random', d_hid=90, Dattn_dropout=0.1):
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_type = 'random_pose', d_hid=90, Dattn_dropout=0.1):
 
         super().__init__()
         self.dim = dim
@@ -321,9 +321,51 @@ class WindowAttention(nn.Module):
             x = torch.matmul(attn, v)
             # print('x_shape:',x.shape)
 
+        elif self.attn_type == "dense_pose":
+            attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:64]
+
+            relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            attn = attn + relative_position_bias.unsqueeze(0)
+
+            if mask is not None:
+                nw = mask.shape[0]
+                attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, n, n)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+            
+            attn = self.dropout(attn)
+            x = torch.matmul(attn, v)
+
         elif self.attn_type == 'random':
             attn = torch.randn(b_,self.num_heads,64,64)
             # attn = attn.to(torch.device('cuda' if mask.is_cuda else 'cpu'))
+            attn =attn.to(torch.device('cuda'))
+
+            if mask is not None:
+                nw = mask.shape[0]
+                attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, n, n)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+            
+            # print('attn_shape:',attn.shape)
+            # print('v_shape:',v.shape)
+
+            attn = self.dropout(attn)
+            x = torch.matmul(attn, v)
+
+        elif self.attn_type == 'random_pose':
+            attn = torch.randn(b_,self.num_heads,64,64)
+            relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            attn = attn + relative_position_bias.unsqueeze(0)
+            attn =attn.to(torch.device('cuda'))
 
             if mask is not None:
                 nw = mask.shape[0]
