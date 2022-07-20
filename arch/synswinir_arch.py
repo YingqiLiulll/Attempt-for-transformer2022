@@ -216,7 +216,7 @@ class WindowAttention(nn.Module):
         proj_drop (float, optional): Dropout ratio of output. Default: 0.0
     """
 
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_type = 'dense_pose', d_hid=90, Dattn_dropout=0.1):
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_type = 'fact_dense_pose', d_hid=90, Dattn_dropout=0.1):
 
         super().__init__()
         self.dim = dim
@@ -232,6 +232,8 @@ class WindowAttention(nn.Module):
         self.w_2 = nn.Linear(d_hid,64) #由中间的维度d_hid到设置的最大维度N
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(Dattn_dropout)
+        self.f_a = nn.linear(dim//num_heads, num_heads)
+        self.f_b = nn.linear(dim//num_heads, num_heads)
 
         # self.batch_size = batch_size
         self.attn_type = attn_type.lower()
@@ -321,6 +323,27 @@ class WindowAttention(nn.Module):
 
         elif self.attn_type == "dense_pose":
             attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:64]
+
+            relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            attn = attn + relative_position_bias.unsqueeze(0)
+
+            if mask is not None:
+                nw = mask.shape[0]
+                attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, n, n)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+            
+            attn = self.dropout(attn)
+            x = torch.matmul(attn, v)
+
+        elif self.attn_type == "fact_dense_pose":
+            h_a = torch.repeat_interleave(self.f_a(q), num_heads, -1)[:,:,:,:64]
+            h_b = torch.repeat_interleave(self.f_b(q), num_heads, -1)[:,:,:,:64]
+            attn = torch.matmul(h_a, h_b.transpose(2,3))
 
             relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
                 self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
