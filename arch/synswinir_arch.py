@@ -92,115 +92,6 @@ def window_reverse(windows, window_size, h, w):
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(b, h, w, -1)
     return x
 
-class ScaledDotProductAttention(nn.Module):
-    ''' Scaled Dot-Product Attention '''
-
-    def __init__(self, temperature, attn_dropout=0.1):
-        super().__init__()
-        self.temperature = temperature
-        self.dropout = nn.Dropout(attn_dropout)
-
-    def forward(self, q, k, v, mask=None):
-
-        attn = torch.matmul(q / self.temperature, k.transpose(2, 3))
-
-        if mask is not None:
-            attn = attn.masked_fill(mask == 0, -1e9)
-        attn = self.dropout(F.softmax(attn, dim=-1))
-        output = torch.matmul(attn, v)
-
-        return output, attn
-
-# template for attention synthesizers
-class DenseAttention(nn.Module):
-    def __init__(self, max_seq_len, d_k, d_hid = 64, attn_dropout = 0.1):
-        #d_hid = 8*(128/8)/2
-        super(DenseAttention, self).__init__()
-        self.w_1 = nn.Linear(d_k, d_hid)
-        self.w_2 = nn.Linear(d_hid, max_seq_len)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(attn_dropout)
-
-    def forward(self, q, v, len_q, mask=None):
-
-        # b x n x lq x dq -> b x n x lq x lq #
-        dense_attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:len_q]
-        # print('Attn: ', dense_attn.shape)
-        # print('Mask: ', mask.shape)
-        # print('V: ', v.shape)
-
-        if mask is not None:
-            dense_attn = dense_attn.masked_fill(mask == 0, -1e9)
-
-        dense_attn = self.dropout(F.softmax(dense_attn, dim=-1))
-        output = torch.matmul(dense_attn, v)
-        
-        return output, dense_attn
-
-class FactorizedDenseAttention(nn.Module):
-    def __init__(self, max_seq_len, d_k, f, attn_dropout = 0.1):
-        #d_hid = 8*(128/8)/2
-        super(DenseAttention, self).__init__()
-        self.f = f
-        self.max_seq_len = max_seq_len
-        self.f_a = nn.Linear(d_k, f)
-        self.f_b = nn.Linear(d_k, max_seq_len/f)
-        # self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(attn_dropout)
-
-    def forward(self, q, v, len_q, mask=None, factorize=False):
-
-        h_a = torch.repeat_interleave(self.f_a(q), self.max_seq_len/self.f, -1)[:,:,:,:len_q]
-        h_b = torch.repeat_interleave(self.f_b(q), self.f, -1)[:,:,:,:len_q]
-        dense_attn = torch.matmul(h_a, h_b.transpose(2, 3))
-
-        if mask is not None:
-            dense_attn = dense_attn.masked_fill(mask == 0, -1e9)
-
-        dense_attn = self.dropout(F.softmax(dense_attn, dim=-1))
-        output = torch.matmul(dense_attn, v)
-        
-        return output, dense_attn
-
-class RandomAttention(nn.Module):
-    def __init__(self, batch_size, n_head, max_seq_len, attn_dropout = 0.1):
-        super(RandomAttention, self).__init__()
-        #device = torch.device("GPU"),
-        self.random_attn = torch.randn(batch_size, n_head, max_seq_len, max_seq_len, requires_grad = True)
-        self.dropout = nn.Dropout(attn_dropout)
-
-    def forward(self, v, len_q, mask=None):
-
-        # b x n x max_len x max_len -> b x n x lq x lq
-        random_attn = self.random_attn[:mask.shape[0],:,:len_q,:len_q]
-        random_attn = random_attn.to(torch.device('cuda' if mask.is_cuda else 'cpu'))
-
-        if mask is not None:
-            random_attn = random_attn.masked_fill(mask == 0, -1e9)
-
-        random_attn = self.dropout(F.softmax(random_attn, dim=-1))
-        output = torch.matmul(random_attn, v)
-        
-        return output, random_attn
-
-class FactorizedRandomAttention(nn.Module):
-    def __init__(self, batch_size, n_head, f,  max_seq_len, attn_dropout = 0.1):
-        super(RandomAttention, self).__init__()
-        #device = torch.device("GPU"),
-        self.random_attn_1 = torch.randn(batch_size, n_head, max_seq_len, f, requires_grad = True)
-        self.random_attn_2 = torch.randn(batch_size, n_head, f, max_seq_len, requires_grad = True)
-        self.dropout = nn.Dropout(attn_dropout)
-    def forward(self, v, len_q, mask=None, factorize=False):
-        # b x n x max_len x max_len -> b x n x lq x lq #[:,:,:len_q,:len_q]
-        random_attn = torch.matmul(self.random_attn_1, self.random_attn_2)[:mask.shape[0],:,:len_q,:len_q]
-
-        if mask is not None:
-            random_attn = random_attn.masked_fill(mask == 0, -1e9)
-
-        random_attn = self.dropout(F.softmax(random_attn, dim=-1))
-        output = torch.matmul(random_attn, v)
-        
-        return output, random_attn
 
 class WindowAttention(nn.Module):
     r""" Window based multi-head self attention (W-MSA) module with relative position bias.
@@ -216,10 +107,11 @@ class WindowAttention(nn.Module):
         proj_drop (float, optional): Dropout ratio of output. Default: 0.0
     """
 
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_type = 'fact_dense_pose', d_hid=32, Dattn_dropout=0.1):
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_type='vanilla', d_hid=32, f=8, Dattn_dropout=0.1):
 
         super().__init__()
         self.dim = dim
+        self.f = f
         self.window_size = window_size  # Wh, Ww
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -232,9 +124,9 @@ class WindowAttention(nn.Module):
         self.w_2 = nn.Linear(d_hid,64) #由中间的维度d_hid到设置的最大维度N
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(Dattn_dropout)
-        # add for FactorizedDenseAttention
-        self.f_a = nn.Linear(dim//num_heads, num_heads)
-        self.f_b = nn.Linear(dim//num_heads, num_heads)
+
+        self.f_a = nn.Linear(dim//num_heads, f)
+        self.f_b = nn.Linear(dim//num_heads, 64//f)
 
         # self.batch_size = batch_size
         self.attn_type = attn_type.lower()
@@ -278,8 +170,9 @@ class WindowAttention(nn.Module):
 
         if self.attn_type == "vanilla":
             q = q * self.scale
+            print('q.shape', q.shape)
             attn = (q @ k.transpose(-2, -1))
-
+            print('attn.shape', attn.shape)
             relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
                 self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
             relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
@@ -300,16 +193,10 @@ class WindowAttention(nn.Module):
             x = self.proj_drop(x)
 
         elif self.attn_type == "dense":
-            # print('q_shape:', q.shape)
             attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:64]
-            # F1 = self.w_1(q)
-            # # print('F1:', F1.shape)
-            # F1 = self.relu(F1)
-            # F2 = self.w_2(F1)
-            # attn = F2[:,:,:,:64]
             
-            # print('attn_shape:', attn.shape)
-
+            print('q.shape', q.shape)
+            print('attn.shape', attn.shape)
             if mask is not None:
                 nw = mask.shape[0]
                 attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
@@ -324,6 +211,8 @@ class WindowAttention(nn.Module):
 
         elif self.attn_type == "dense_pose":
             attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:64]
+            
+            print('attn_device', attn.device)
 
             relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
                 self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
@@ -342,12 +231,13 @@ class WindowAttention(nn.Module):
             x = torch.matmul(attn, v)
 
         elif self.attn_type == "fact_dense_pose":
-            h_a = torch.repeat_interleave(self.f_a(q), self.num_heads, -1)[:,:,:,:64]
-            h_b = torch.repeat_interleave(self.f_b(q), self.num_heads, -1)[:,:,:,:64]
-            attn = torch.matmul(h_a, h_b.transpose(2,3))
+            h_a = torch.repeat_interleave(self.f_a(q), 64//self.f, -1)[:, :, :, :64]
+            h_b = torch.repeat_interleave(self.f_b(q), self.f, -1)[:, :, :, :64]
+            attn = torch.matmul(h_a, h_b.transpose(2, 3))
 
             relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+                -1)  # Wh*Ww,Wh*Ww,nH
             relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
             attn = attn + relative_position_bias.unsqueeze(0)
 
@@ -358,7 +248,47 @@ class WindowAttention(nn.Module):
                 attn = self.softmax(attn)
             else:
                 attn = self.softmax(attn)
-            
+
+            attn = self.dropout(attn)
+            x = torch.matmul(attn, v)
+
+        elif self.attn_type == 'random':
+            attn = torch.randn(b_, self.num_heads, 64, 64)
+            attn = attn.to(torch.device('cuda' if v.is_cuda else 'cpu'))
+            # attn = attn.to(torch.device('cuda'))
+            print('attn_device', attn.device)
+            print('v_device', v.device)
+
+            if mask is not None:
+                nw = mask.shape[0]
+                attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, n, n)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+
+            attn = self.dropout(attn)
+            x = torch.matmul(attn, v)
+
+        elif self.attn_type == 'random_pose':
+            attn = torch.randn(b_, self.num_heads, 64, 64)
+
+            relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+                -1)  # Wh*Ww,Wh*Ww,nH
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+            attn = attn + relative_position_bias.unsqueeze(0)
+
+            # attn = attn.to(torch.device('cuda'))
+
+            if mask is not None:
+                nw = mask.shape[0]
+                attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, self.num_heads, n, n)
+                attn = self.softmax(attn)
+            else:
+                attn = self.softmax(attn)
+
             attn = self.dropout(attn)
             x = torch.matmul(attn, v)
 
@@ -404,6 +334,7 @@ class SwinTransformerBlock(nn.Module):
                  dim,
                  input_resolution,
                  num_heads,
+                 attn_type,
                  window_size=7,
                  shift_size=0,
                  mlp_ratio=4.,
@@ -435,6 +366,7 @@ class SwinTransformerBlock(nn.Module):
             qkv_bias=qkv_bias,
             qk_scale=qk_scale,
             attn_drop=attn_drop,
+            attn_type=attn_type,
             proj_drop=drop)
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -606,6 +538,7 @@ class BasicLayer(nn.Module):
                  depth,
                  num_heads,
                  window_size,
+                 attn_type,
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
@@ -635,6 +568,7 @@ class BasicLayer(nn.Module):
                 qk_scale=qk_scale,
                 drop=drop,
                 attn_drop=attn_drop,
+                attn_type=attn_type,
                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
                 norm_layer=norm_layer) for i in range(depth)
         ])
@@ -696,6 +630,7 @@ class RSTB(nn.Module):
                  depth,
                  num_heads,
                  window_size,
+                 attn_type,
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
@@ -724,6 +659,7 @@ class RSTB(nn.Module):
             qk_scale=qk_scale,
             drop=drop,
             attn_drop=attn_drop,
+            attn_type=attn_type,
             drop_path=drop_path,
             norm_layer=norm_layer,
             downsample=downsample,
@@ -931,6 +867,7 @@ class SynSwinIR(nn.Module):
                  img_range=1.,
                  upsampler='',
                  resi_connection='1conv',
+                 attn_type='vanilla',
                  **kwargs):
         super(SynSwinIR, self).__init__()
         num_in_ch = in_chans
@@ -999,6 +936,7 @@ class SynSwinIR(nn.Module):
                 qk_scale=qk_scale,
                 drop=drop_rate,
                 attn_drop=attn_drop_rate,
+                attn_type=attn_type,
                 drop_path=dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])],  # no impact on SR results
                 norm_layer=norm_layer,
                 downsample=None,
