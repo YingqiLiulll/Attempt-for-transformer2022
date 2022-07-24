@@ -232,6 +232,7 @@ class WindowAttention(nn.Module):
         self.w_2 = nn.Linear(d_hid,64) #由中间的维度d_hid到设置的最大维度N
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(Dattn_dropout)
+        # add for FactorizedDenseAttention
         self.f_a = nn.Linear(dim//num_heads, num_heads)
         self.f_b = nn.Linear(dim//num_heads, num_heads)
 
