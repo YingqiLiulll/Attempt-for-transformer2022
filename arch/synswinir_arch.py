@@ -149,6 +149,7 @@ class WindowAttention(nn.Module):
         self.register_buffer('relative_position_index', relative_position_index)
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.v = nn.Linear(dim, dim, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
 
@@ -164,11 +165,14 @@ class WindowAttention(nn.Module):
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
         """
         b_, n, c = x.shape
-        qkv = self.qkv(x).reshape(b_, n, 3, self.num_heads, c // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
+
+        # qkv = self.qkv(x).reshape(b_, n, 3, self.num_heads, c // self.num_heads).permute(2, 0, 3, 1, 4)
+        # q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
 
 
         if self.attn_type == "vanilla":
+            qkv = self.qkv(x).reshape(b_, n, 3, self.num_heads, c // self.num_heads).permute(2, 0, 3, 1, 4)
+            q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
             q = q * self.scale
             print('q.shape', q.shape)
             attn = (q @ k.transpose(-2, -1))
@@ -193,10 +197,13 @@ class WindowAttention(nn.Module):
             x = self.proj_drop(x)
 
         elif self.attn_type == "dense":
+            v = self.v(x).reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+            q = x.reshape(b_, n, self.num_heads, c // self.num_heads).permute(0, 2, 1, 3)
+
             attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:64]
             
-            print('q.shape', q.shape)
-            print('attn.shape', attn.shape)
+            # print('q.shape', q.shape)
+            # print('attn.shape', attn.shape)
             if mask is not None:
                 nw = mask.shape[0]
                 attn = attn.view(b_ // nw, nw, self.num_heads, n, n) + mask.unsqueeze(1).unsqueeze(0)
