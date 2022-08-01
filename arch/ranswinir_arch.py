@@ -340,6 +340,7 @@ class WindowAttention(nn.Module):
             attn = self.dropout(attn)
             x = torch.matmul(attn, v)
 
+        
         elif self.attn_type == 'random':
             attn = torch.randn(b_,self.num_heads,64,64)
             # attn = attn.to(torch.device('cuda' if mask.is_cuda else 'cpu'))

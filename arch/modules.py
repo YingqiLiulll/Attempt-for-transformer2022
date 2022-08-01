@@ -34,7 +34,7 @@ class DenseAttentionpre(nn.Module):
         self.w_1 = nn.Linear(d_k, d_hid) #由原始input的维度d_k到中间的维度d_hid
         self.w_2 = nn.Linear(d_hid, max_seq_len) #由中间的维度d_hid到设置的最大维度N
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(attn_dropout)
+        # self.dropout = nn.Dropout(attn_dropout)
 
     def forward(self, q, v, len_q, mask=None):
 
